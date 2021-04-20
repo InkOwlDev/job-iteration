@@ -6,28 +6,6 @@ module JobIteration
   module Iteration
     extend ActiveSupport::Concern
 
-    class CursorError < ArgumentError
-      attr_reader :cursor
-
-      def initialize(message, cursor:)
-        super(message)
-        @cursor = cursor
-      end
-
-      def message
-        "#{super} (#{inspected_cursor})"
-      end
-
-      private
-
-      def inspected_cursor
-        cursor.inspect
-      rescue NoMethodError
-        # For those brave enough to try to use BasicObject as cursor. Nice try.
-        Object.instance_method(:inspect).bind(cursor).call
-      end
-    end
-
     included do |_base|
       attr_accessor(
         :cursor_position,
@@ -142,8 +120,7 @@ module JobIteration
       arguments = arguments.dup.freeze
       found_record = false
       enumerator.each do |object_from_enumerator, index|
-        # Deferred until 2.0.0
-        # assert_valid_cursor!(index)
+        assert_valid_cursor!(index)
 
         record_unit_of_work do
           found_record = true
@@ -206,11 +183,17 @@ module JobIteration
     def assert_valid_cursor!(cursor)
       return if serializable?(cursor)
 
-      raise CursorError.new(
-        "Cursor must be composed of objects capable of built-in (de)serialization: " \
-        "Strings, Integers, Floats, Arrays, Hashes, true, false, or nil.",
-        cursor: cursor,
-      )
+      Deprecation.warn(<<~DEPRECATION_MESSAGE.chomp)
+        Cursor must be composed of objects capable of built-in (de)serialization:
+          Strings, Integers, Floats, Arrays, Hashes, true, false, or nil.
+        #{self.class.name}#build_enumerator's Enumerator provided:
+          #{begin
+              cursor.inspect
+            rescue
+              Object.instance_method(:inspect).bind(cursor).call
+            end}
+        This will raise starting in version 2.0 of JobIteration!
+      DEPRECATION_MESSAGE
     end
 
     def assert_implements_methods!

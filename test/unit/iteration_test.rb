@@ -66,6 +66,7 @@ class JobIterationTest < IterationUnitTest
   class InvalidCursorJob < ActiveJob::Base
     include JobIteration::Iteration
     def each_iteration(*)
+      return if Gem::Version.new(JobIteration::VERSION) < Gem::Version.new("2.0")
       raise "Cursor invalid. This should never run!"
     end
   end
@@ -182,58 +183,68 @@ class JobIterationTest < IterationUnitTest
     assert_includes(methods_added, :foo)
   end
 
-  def test_jobs_using_time_cursor_will_raise
-    skip("Deferred until 2.0.0")
+  def test_jobs_using_time_cursor_is_deprecated
     push(JobWithTimeCursor)
-    assert_raises_cursor_error { work_one_job }
+    assert_cursor_deprecation_warning { work_one_job }
   end
 
-  def test_jobs_using_active_record_cursor_will_raise
-    skip("Deferred until 2.0.0")
+  def test_jobs_using_active_record_cursor_is_deprecated
     refute_nil(Product.first)
     push(JobWithActiveRecordCursor)
-    assert_raises_cursor_error { work_one_job }
+    assert_cursor_deprecation_warning { work_one_job }
   end
 
-  def test_jobs_using_symbol_cursor_will_raise
-    skip("Deferred until 2.0.0")
+  def test_jobs_using_symbol_cursor_is_deprecated
     push(JobWithSymbolCursor)
-    assert_raises_cursor_error { work_one_job }
+    assert_cursor_deprecation_warning { work_one_job }
   end
 
-  def test_jobs_using_string_subclass_cursor_will_raise
-    skip("Deferred until 2.0.0")
+  def test_jobs_using_string_subclass_cursor_is_deprecated
     push(JobWithStringSubclassCursor)
-    assert_raises_cursor_error { work_one_job }
+    assert_cursor_deprecation_warning { work_one_job }
   end
 
-  def test_jobs_using_basic_object_cursor_will_raise
-    skip("Deferred until 2.0.0")
+  def test_jobs_using_basic_object_cursor_is_deprecated
     push(JobWithBasicObjectCursor)
-    assert_raises_cursor_error { work_one_job }
+    assert_cursor_deprecation_warning { work_one_job }
   end
 
-  def test_jobs_using_complex_but_serializable_cursor_will_not_raise
-    skip("Deferred until 2.0.0")
+  def test_jobs_using_complex_but_serializable_cursor_is_not_deprecated
     push(JobWithComplexCursor)
-    work_one_job
+    assert_no_cursor_deprecation_warning do
+      work_one_job
+    end
   end
 
   private
 
-  def assert_raises_cursor_error(&block)
-    error = assert_raises(JobIteration::Iteration::CursorError, &block)
-    inspected_cursor = begin
-                         error.cursor.inspect
-                       rescue NoMethodError
-                         Object.instance_method(:inspect).bind(error.cursor).call
-                       end
-    assert_equal(
-      "Cursor must be composed of objects capable of built-in (de)serialization: " \
-      "Strings, Integers, Floats, Arrays, Hashes, true, false, or nil. " \
-      "(#{inspected_cursor})",
-      error.message,
-    )
+  def assert_cursor_deprecation_warning
+    original_behaviour = JobIteration::Deprecation.behavior
+    warning_count = 0
+    prefix = <<~PREFIX
+      DEPRECATION WARNING: Cursor must be composed of objects capable of built-in (de)serialization:
+        Strings, Integers, Floats, Arrays, Hashes, true, false, or nil.
+      #{ActiveJob::Base.queue_adapter.enqueued_jobs.first.fetch("job_class")}#build_enumerator's Enumerator provided:
+    PREFIX
+    JobIteration::Deprecation.behavior = lambda do |message, _callstack, deprecation_horizon, gem_name|
+      warning_count += 1
+      suffix = "This will raise starting in version #{deprecation_horizon} of #{gem_name}!"
+      assert_match(/\A#{Regexp.escape(prefix)}  .+\n#{Regexp.escape(suffix)}/, message)
+    end
+    yield
+    assert_equal(1, warning_count, "expected deprecation warning")
+  ensure
+    JobIteration::Deprecation.behavior = original_behaviour
+  end
+
+  def assert_no_cursor_deprecation_warning
+    original_behaviour = JobIteration::Deprecation.behavior
+    JobIteration::Deprecation.behavior = lambda do |message, _callstack, _deprecation_horizon, _gem_name|
+      flunk("Expected no deprecation warning: #{message}")
+    end
+    yield
+  ensure
+    JobIteration::Deprecation.behavior = original_behaviour
   end
 
   def push(job, *args)
