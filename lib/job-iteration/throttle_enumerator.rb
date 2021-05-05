@@ -34,7 +34,7 @@ module JobIteration
             throw(:abort, :skip_complete_callbacks)
           end
 
-          yielder.yield(*@enum.next)
+          yielder.yield(*@enum.next_values)
         end
       end
     end
